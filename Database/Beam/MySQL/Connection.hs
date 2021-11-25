@@ -135,22 +135,16 @@ instance MonadBeam MySQL MySQLM where
                        case d of
                          Left  e  -> throwIO e
                          Right d' -> next d' (curCol + 1) fields
-                step (PeekField next) curCol fields@((desc, field):_) =
-                    do d <- parseField desc field
-                       case d of
-                         Left {}  -> next Nothing curCol fields
-                         Right d' -> next (Just d') curCol fields
-                step (PeekField next) curCol [] =
-                    next Nothing curCol []
-                step (CheckNextNNull n next) curCol fields
-                    | n > length fields = next False curCol fields
-                    | otherwise =
-                        let areNull = all (isNothing . snd) (take n fields)
-                        in next areNull
-                                (if areNull then curCol + n else curCol)
-                                (if areNull then drop n fields else fields)
-                step (FailParseWith f) curCol _ =
-                  throwIO (CouldNotReadColumn curCol f)
+                step (Alt (FromBackendRowM a) (FromBackendRowM b) next) curCol fields =
+                  do aRes <- try $ runF a (\x curCol' fields' -> next x curCol' fields') step curCol fields
+                     case aRes of
+                       Right next' -> pure next'
+                       Left (aErr :: SomeException) -> do
+                         bRes <- try $ runF b (\x curCol' fields' -> next x curCol' fields') step curCol fields
+                         case bRes of
+                           Right next' -> pure next'
+                           Left (_ :: SomeException) -> throwIO aErr
+                step (FailParseWith f) _ _ = throwIO f
 
                 MySQLM doConsume = consume fetchRow'
 
